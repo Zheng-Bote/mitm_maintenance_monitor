@@ -5,6 +5,12 @@ All notable changes to the `mitm_maintenance_monitor` component will be document
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.3.0] - 2026-11-10
+
+### Added
+- `mail_dir` is created with mode `0700` if it does not exist (including missing parents); an existing directory with another mode is set to `0700` (`WARNING:` audit; if that is not possible, e.g. for a directory of another owner, only the warning). A write check (`*.tmp` probe file) runs before anything is collected.
+- Errors about `mail_dir` show a relative path together with its absolute path and the working directory (the scheduler starts jobs in the directory of its binary).
+
 ## [v0.2.2] - 2026-11-10
 
 ### Fixed

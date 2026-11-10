@@ -7,7 +7,7 @@
  *
  * @file config.go
  * @brief JSON job arguments of the monitor: defaults and validation.
- * @version 0.2.2
+ * @version 0.3.0
  * @date 2026-11-10
  *
  * @author ZHENG Robert (robert@hase-zheng.net)
@@ -22,7 +22,6 @@ import (
 	"errors"
 	"fmt"
 	"net/mail"
-	"os"
 	"strings"
 )
 
@@ -172,9 +171,6 @@ func parseArgs(raw string) (MonitorArgs, error) {
 
 	if strings.TrimSpace(args.MailDir) == "" {
 		return args, errors.New("mail_dir is required in the monitor arguments")
-	}
-	if info, err := os.Stat(args.MailDir); err != nil || !info.IsDir() {
-		return args, fmt.Errorf("mail_dir %q is not an accessible directory", args.MailDir)
 	}
 	switch {
 	case *args.SuppressRepeatMinutes < 0:

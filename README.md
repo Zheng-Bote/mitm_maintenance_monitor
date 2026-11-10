@@ -364,7 +364,7 @@ only job, run, time and severity plus the frontend link:
 
 | Field | Required | Default | Description |
 |---|:---:|---|---|
-| `mail_dir` | ✅ | – | Outbox directory; must exist. |
+| `mail_dir` | ✅ | – | Outbox directory, shared with `mitm_maintenance_sendmail`. Created with mode `0700` if missing (including parents); another mode is set to `0700`. A relative path is resolved against the working directory – under the scheduler the directory of the scheduler binary (`app/bin`, so `../smtp_out` is `app/smtp_out`). |
 | `routing` | ✅ | – | Rules `{category, to, cc}`; every enabled category needs a rule or a `*` rule. Plain addresses only (`ops@example.com`); the domain must contain a dot, as required by `mitm_maintenance_sendmail` (`ops@localhost` is rejected). |
 | `subject_prefix` | | `[MitM]` | Prefix of every subject, e.g. `[MitM prod]`. |
 | `sources.program_runs.enabled` | | `true` | Failed, hanging and recovered runs. |
@@ -468,8 +468,10 @@ Exit code `0` means success, `1` a fatal error.
   `ingestion_cursors` or `source_credentials`.
 - `dead_letter_queue.payload` is never read; of `admin_audit_logs.details`
   only the allowlisted `detail_fields` are copied.
-- Mail files are plaintext: restrict `mail_dir` to the scheduler user
-  (`chmod 700`); files are created with mode `0600`.
+- Mail files are plaintext: the monitor keeps `mail_dir` at mode `0700`
+  (creates it, or corrects another mode with a `WARNING:` audit) and creates
+  files with mode `0600`. Before collecting, it checks that `mail_dir` is
+  writable (probe file `*.tmp`, ignored by SendMail).
 - Error texts are truncated to `max_message_chars`; `metadata_only` removes
   them completely.
 

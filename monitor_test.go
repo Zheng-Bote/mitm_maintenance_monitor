@@ -47,7 +47,6 @@ func TestParseArgsRejectsInvalid(t *testing.T) {
 	for name, raw := range map[string]string{
 		"empty":           ``,
 		"no mail_dir":     `{"routing":[{"category":"*","to":["a@example.com"]}]}`,
-		"missing dir":     `{"mail_dir":"/does/not/exist","routing":[{"category":"*","to":["a@example.com"]}]}`,
 		"no routing":      fmt.Sprintf(`{"mail_dir":%q}`, dir),
 		"missing route":   fmt.Sprintf(`{"mail_dir":%q,"routing":[{"category":"job","to":["a@example.com"]}]}`, dir),
 		"bad address":     fmt.Sprintf(`{"mail_dir":%q,"routing":[{"category":"*","to":["Ops <a@example.com>"]}]}`, dir),
@@ -265,5 +264,62 @@ func TestRenderAndWriteMail(t *testing.T) {
 	// Same sources → same file name (a repeated run overwrites instead of duplicating).
 	if mailName([]string{"program_runs/3732"}) != mail.Name {
 		t.Fatal("mail names must be deterministic")
+	}
+}
+
+func TestEnsureMailDir(t *testing.T) {
+	base := t.TempDir()
+
+	// Missing directory (with missing parent) is created with mode 0700.
+	missing := filepath.Join(base, "a", "outbox")
+	notes, err := ensureMailDir(missing)
+	if err != nil || len(notes) != 1 || !strings.HasPrefix(notes[0], "Created mail_dir") {
+		t.Fatalf("create: notes=%v err=%v", notes, err)
+	}
+	if info, _ := os.Stat(missing); info == nil || !info.IsDir() || info.Mode().Perm() != 0o700 {
+		t.Fatalf("created directory: %v", info)
+	}
+
+	// Correct mode: nothing to report, no probe file left.
+	notes, err = ensureMailDir(missing)
+	if err != nil || len(notes) != 0 {
+		t.Fatalf("existing 0700: notes=%v err=%v", notes, err)
+	}
+	if entries, _ := os.ReadDir(missing); len(entries) != 0 {
+		t.Fatalf("write check must not leave files: %v", entries)
+	}
+
+	// Too open (0755) and too restrictive (0500) modes are set to 0700.
+	for _, mode := range []os.FileMode{0o755, 0o500} {
+		os.Chmod(missing, mode)
+		notes, err = ensureMailDir(missing)
+		info, _ := os.Stat(missing)
+		if err != nil || len(notes) != 1 || !strings.Contains(notes[0], "mode set to 0700") || info.Mode().Perm() != 0o700 {
+			t.Fatalf("mode %04o: notes=%v err=%v mode=%04o", mode, notes, err, info.Mode().Perm())
+		}
+	}
+
+	// A file is not a directory.
+	file := filepath.Join(base, "file")
+	os.WriteFile(file, nil, 0o600)
+	if _, err := ensureMailDir(file); err == nil || !strings.Contains(err.Error(), "is not a directory") {
+		t.Fatalf("file: %v", err)
+	}
+
+	// A path below a file is not accessible.
+	if _, err := ensureMailDir(filepath.Join(file, "outbox")); err == nil || !strings.Contains(err.Error(), "is not accessible") {
+		t.Fatalf("below file: %v", err)
+	}
+}
+
+func TestDescribePathShowsWorkingDirectory(t *testing.T) {
+	cwd, _ := os.Getwd()
+	text := describePath("../smtp_out")
+	if !strings.Contains(text, `"../smtp_out"`) || !strings.Contains(text, filepath.Join(filepath.Dir(cwd), "smtp_out")) ||
+		!strings.Contains(text, "working directory "+cwd) {
+		t.Fatalf("describePath: %s", text)
+	}
+	if describePath("/var/lib/mitm/outbox") != `"/var/lib/mitm/outbox"` {
+		t.Fatal("absolute paths are only quoted")
 	}
 }

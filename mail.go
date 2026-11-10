@@ -7,7 +7,7 @@
  *
  * @file mail.go
  * @brief Renders mails in the header-block format of mitm_maintenance_sendmail and writes them atomically.
- * @version 0.1.0
+ * @version 0.3.0
  * @date 2026-11-10
  *
  * @author ZHENG Robert (robert@hase-zheng.net)
@@ -18,12 +18,17 @@
 package main
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 )
+
+// mailDirMode is the mode of the outbox: mail files are plaintext, only the scheduler user may access them.
+const mailDirMode fs.FileMode = 0o700
 
 const (
 	mailFileSuffix = ".SendMail"
@@ -31,6 +36,62 @@ const (
 )
 
 var lineBreaks = regexp.MustCompile(`[\r\n]+`)
+
+// ensureMailDir makes sure the outbox exists as a directory with mode 0700 and is writable.
+// A missing directory (including missing parents) is created; another mode is corrected to 0700
+// (if that fails, e.g. for a directory of another owner, only a warning is returned, like
+// mitm_maintenance_sendmail does). The returned notes are meant for the audit log.
+func ensureMailDir(dir string) ([]string, error) {
+	where := describePath(dir)
+	var notes []string
+
+	info, err := os.Stat(dir)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		if err := os.MkdirAll(dir, mailDirMode); err != nil {
+			return nil, fmt.Errorf("mail_dir %s does not exist and cannot be created: %w", where, err)
+		}
+		// MkdirAll applies the umask; set the mode explicitly.
+		if err := os.Chmod(dir, mailDirMode); err != nil {
+			return nil, fmt.Errorf("mail_dir %s was created, but its mode cannot be set to 0700: %w", where, err)
+		}
+		notes = append(notes, fmt.Sprintf("Created mail_dir %s with mode 0700", where))
+	case err != nil:
+		return nil, fmt.Errorf("mail_dir %s is not accessible: %w", where, err)
+	case !info.IsDir():
+		return nil, fmt.Errorf("mail_dir %s is not a directory", where)
+	case info.Mode().Perm() != mailDirMode:
+		if err := os.Chmod(dir, mailDirMode); err != nil {
+			notes = append(notes, fmt.Sprintf("WARNING: mail_dir %s has mode %04o instead of 0700 and its mode cannot be changed: %v",
+				where, info.Mode().Perm(), err))
+		} else {
+			notes = append(notes, fmt.Sprintf("WARNING: mail_dir %s had mode %04o; mode set to 0700", where, info.Mode().Perm()))
+		}
+	}
+
+	// Write check with a *.tmp file, which mitm_maintenance_sendmail ignores.
+	probe, err := os.CreateTemp(dir, ".write-check-*"+tempFileSuffix)
+	if err != nil {
+		return notes, fmt.Errorf("mail_dir %s is not writable: %w", where, err)
+	}
+	probe.Close()
+	os.Remove(probe.Name())
+	return notes, nil
+}
+
+// describePath quotes a path; a relative path is followed by its absolute path and the working
+// directory (the scheduler starts jobs in the directory of its own binary).
+func describePath(path string) string {
+	if filepath.IsAbs(path) {
+		return fmt.Sprintf("%q", path)
+	}
+	abs, absErr := filepath.Abs(path)
+	cwd, cwdErr := os.Getwd()
+	if absErr != nil || cwdErr != nil {
+		return fmt.Sprintf("%q", path)
+	}
+	return fmt.Sprintf("%q (%s, working directory %s)", path, abs, cwd)
+}
 
 // headerValue removes line breaks so a value cannot inject further headers.
 func headerValue(value string) string {
