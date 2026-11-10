@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - Immediate runs (`program_id` NULL, e.g. file uploads) made the `program_runs` query fail (`cannot scan NULL`); they are now reported as job `Immediate_Trigger`, like in the scheduler.
 - A successful immediate run no longer recovers the alerts of other immediate runs.
+- Recovery mails: label `Failing since` shortened to `Since`, so the field column stays aligned.
 
 ### Added
 - Read-only integration test (`go test -tags integration`) for the source queries against a real MitM database.
