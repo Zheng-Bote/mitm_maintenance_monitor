@@ -7,7 +7,7 @@
  *
  * @file config.go
  * @brief JSON job arguments of the monitor: defaults and validation.
- * @version 0.2.0
+ * @version 0.2.1
  * @date 2026-11-10
  *
  * @author ZHENG Robert (robert@hase-zheng.net)
@@ -35,9 +35,13 @@ const (
 	categoryAny      = "*"
 )
 
-// defaultAdminActions are the admin_audit_logs actions reported by default (as written by mitm_http-server).
-var defaultAdminActions = []string{"assign_roles", "RESTORE_CONFIG", "key_rotation_success", "DELETE_CREDENTIAL",
-	"DELETE_TARGET_CREDENTIAL", "FORBIDDEN_ACCESS", "BOOTSTRAP_ADMIN_REGISTERED"}
+// defaultAdminActions are the admin_audit_logs actions reported by default, as written by
+// mitm_http-server >= 3.3.0 (core-layer #86). Matching is case-insensitive, so ASSIGN_ROLES and
+// KEY_ROTATION_SUCCESS also match the lower-case names of older servers. Client reports carry the
+// CLIENT_ prefix and never match.
+var defaultAdminActions = []string{"ASSIGN_ROLES", "RESTORE_CONFIG", "KEY_ROTATION_SUCCESS",
+	"UPSERT_CREDENTIAL", "DELETE_CREDENTIAL", "UPSERT_TARGET_CREDENTIAL", "DELETE_TARGET_CREDENTIAL",
+	"FORBIDDEN_ACCESS", "USER_LOGIN_FAILED", "BOOTSTRAP_ADMIN_REGISTERED"}
 
 // systemLevels are the system_logs levels in ascending order.
 var systemLevels = []string{"DEBUG", "INFO", "WARN", "WARNING", "ERROR"}
