@@ -8,7 +8,7 @@
  * @file main.go
  * @brief Scheduled job that detects critical errors (failed and hanging job runs, system_logs errors,
  *        new dead letters) and writes them as *.SendMail files for mitm_maintenance_sendmail.
- * @version 0.2.0
+ * @version 0.2.1
  * @date 2026-11-10
  *
  * @author ZHENG Robert (robert@hase-zheng.net)
@@ -40,7 +40,7 @@ import (
 
 var (
 	appName = "MitM Maintenance Monitor"
-	version = "0.2.0"
+	version = "0.2.1"
 )
 
 const componentName = "mitm_maintenance_monitor"

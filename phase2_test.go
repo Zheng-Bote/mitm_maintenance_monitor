@@ -158,6 +158,23 @@ func TestAdminEventAllowlistsDetails(t *testing.T) {
 	}
 }
 
+func TestDefaultAdminActions(t *testing.T) {
+	for _, required := range []string{"USER_LOGIN_FAILED", "UPSERT_CREDENTIAL", "UPSERT_TARGET_CREDENTIAL", "ASSIGN_ROLES", "KEY_ROTATION_SUCCESS"} {
+		found := false
+		for _, action := range defaultAdminActions {
+			found = found || action == required
+		}
+		if !found {
+			t.Errorf("default actions miss %s", required)
+		}
+	}
+	for _, action := range defaultAdminActions {
+		if strings.HasPrefix(action, "CLIENT_") || action != strings.ToUpper(action) {
+			t.Errorf("default action %q must be an upper-case server action", action)
+		}
+	}
+}
+
 func TestPhase2Config(t *testing.T) {
 	args := testArgs(t, "")
 	if !enabled(args.Sources.MissedRuns.Enabled) || args.Sources.MissedRuns.GraceMinutes != 30 ||

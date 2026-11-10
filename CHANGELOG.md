@@ -5,6 +5,11 @@ All notable changes to the `mitm_maintenance_monitor` component will be document
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.2.1] - 2026-11-10
+
+### Changed
+- Default `sources.admin_audit_logs.actions` follow mitm-http-server 3.3.0 ([core-layer #86](https://github.com/Zheng-Bote/mitm_core-layer/issues/86)): `ASSIGN_ROLES`, `RESTORE_CONFIG`, `KEY_ROTATION_SUCCESS`, `UPSERT_CREDENTIAL`, `DELETE_CREDENTIAL`, `UPSERT_TARGET_CREDENTIAL`, `DELETE_TARGET_CREDENTIAL`, `FORBIDDEN_ACCESS`, `USER_LOGIN_FAILED`, `BOOTSTRAP_ADMIN_REGISTERED` (matching stays case-insensitive).
+
 ## [v0.2.0] - 2026-11-10
 
 Phase 2 of [#1](https://github.com/Zheng-Bote/mitm_maintenance_monitor/issues/1).

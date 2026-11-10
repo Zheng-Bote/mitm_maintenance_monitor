@@ -314,9 +314,10 @@ argument.
     "dead_letter_queue": { "enabled": true },
     "admin_audit_logs":  {
       "enabled": true,
-      "actions": ["assign_roles", "RESTORE_CONFIG", "key_rotation_success", "DELETE_CREDENTIAL",
-                  "DELETE_TARGET_CREDENTIAL", "FORBIDDEN_ACCESS", "BOOTSTRAP_ADMIN_REGISTERED"],
-      "detail_fields": ["source_name", "role_ids"]
+      "actions": ["ASSIGN_ROLES", "RESTORE_CONFIG", "KEY_ROTATION_SUCCESS",
+                  "UPSERT_CREDENTIAL", "DELETE_CREDENTIAL", "UPSERT_TARGET_CREDENTIAL", "DELETE_TARGET_CREDENTIAL",
+                  "FORBIDDEN_ACCESS", "USER_LOGIN_FAILED", "BOOTSTRAP_ADMIN_REGISTERED"],
+      "detail_fields": ["method", "reason", "client_ip", "source_name", "topic", "operation", "roles"]
     }
   },
   "routing": [
@@ -377,7 +378,7 @@ only job, run, time and severity plus the frontend link:
 | `sources.missed_runs.grace_minutes` | | `30` | Time after a cron time within which the run must have started. |
 | `sources.missed_runs.exclude_jobs` | | `[]` | Job names to ignore. |
 | `sources.admin_audit_logs.enabled` | | `false` | Critical admin actions (category `security`; needs a `security` or `*` route). |
-| `sources.admin_audit_logs.actions` | | see full example | Actions to report, case-insensitive. |
+| `sources.admin_audit_logs.actions` | | see full example | Actions to report, case-insensitive. The default list matches the action names of mitm-http-server 3.3.0 (see its API documentation, *Admin Audit Log*); client reports (`CLIENT_*`) never match. |
 | `sources.admin_audit_logs.detail_fields` | | `[]` | Allowlist of `details` keys copied into the mail; `details` is never copied completely. |
 | `digest.enabled` / `heartbeat.enabled` | | `false` | Daily digest / heartbeat mail. |
 | `digest.hour_utc` / `heartbeat.hour_utc` | | `6` | Hour (UTC) after which the mail of the day is written. |
