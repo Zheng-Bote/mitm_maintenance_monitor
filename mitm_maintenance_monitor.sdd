@@ -41,6 +41,7 @@ Must:
   Copy only allowlisted `admin_audit_logs.details` fields into mails.
   Write the daily digest and the heartbeat at most once per day after their `hour_utc`, tracked in `monitor_state`.
   Validate every recipient address with the rule of mitm_maintenance_sendmail (`isValidEmail`: one `@`, non-empty local part, domain with a dot) and reject an invalid configuration at startup.
+  Ensure at startup that `mail_dir` exists as a directory with mode `0700` and is writable: create it (with missing parents) if it does not exist, set another mode to `0700` with a `WARNING:` audit (only warn if that fails), and exit with code 1 if it is not a directory or not writable.
   Write every mail atomically: `<name>.tmp` with mode `0600`, then rename to `<name>.SendMail`; `<name>` is derived deterministically from the source entries of the mail.
   Exit with code 1 after a `failed` status event and an `ERROR: <message>` audit event on every fatal error.
 

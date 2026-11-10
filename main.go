@@ -8,7 +8,7 @@
  * @file main.go
  * @brief Scheduled job that detects critical errors (failed and hanging job runs, system_logs errors,
  *        new dead letters) and writes them as *.SendMail files for mitm_maintenance_sendmail.
- * @version 0.2.2
+ * @version 0.3.0
  * @date 2026-11-10
  *
  * @author ZHENG Robert (robert@hase-zheng.net)
@@ -40,7 +40,7 @@ import (
 
 var (
 	appName = "MitM Maintenance Monitor"
-	version = "0.2.2"
+	version = "0.3.0"
 )
 
 const componentName = "mitm_maintenance_monitor"
@@ -103,6 +103,14 @@ func run(ctx context.Context) error {
 		rawArgs = os.Args[1]
 	}
 	args, err := parseArgs(rawArgs)
+	if err != nil {
+		return fail(ipc, err)
+	}
+	notes, err := ensureMailDir(args.MailDir)
+	for _, note := range notes {
+		log.Println(note)
+		ipc.SendAudit(note)
+	}
 	if err != nil {
 		return fail(ipc, err)
 	}
