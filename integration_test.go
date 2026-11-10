@@ -85,6 +85,44 @@ func TestReadOnlySources(t *testing.T) {
 	}
 	t.Logf("dead letters=%d", len(dlq))
 
+	// Phase 2 (in-memory cursors, nothing is written).
+	from := now.Add(-7 * 24 * time.Hour)
+	missed, err := collectMissedRuns(ctx, db, &cursor{Source: sourceMissedRuns, LastTS: &from}, now, MissedRunsConfig{GraceMinutes: 30})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("missed runs (last 24 h)=%d truncated=%v invalid crons=%v", len(missed.events), missed.truncated, missed.invalidCrons)
+	for i, e := range missed.events {
+		if i >= 5 {
+			break
+		}
+		t.Logf("missed: %s", e.Subject)
+	}
+	security, err := collectAdminAudit(ctx, db, &cursor{Source: sourceAdminAudit, LastID: "0"}, now.Add(-settleDelay),
+		AdminAuditConfig{Enabled: true, Actions: defaultAdminActions, DetailFields: []string{"source_name"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("security events=%d", len(security))
+	for i, e := range security {
+		if i >= 5 {
+			break
+		}
+		t.Logf("security: %s %v", e.Subject, e.Fields)
+	}
+	digest, err := collectDigest(ctx, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("digest: jobs=%d jobWarnings=%d systemWarnings=%d dlq=%d/%d transformationErrors=%d openAlerts=%d",
+		len(digest.Jobs), len(digest.JobWarnings), len(digest.SystemWarnings), digest.DLQOpen, digest.DLQNew,
+		digest.TransformationErrorTotal, digest.OpenAlertCount)
+	heartbeat, err := collectHeartbeat(ctx, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("heartbeat: runs=%d failed=%d openAlerts=%d", heartbeat.Runs, heartbeat.Failed, heartbeat.OpenAlerts)
+
 	// First-run initialization paths (in memory only).
 	for _, c := range []*cursor{{Source: sourceProgramRuns, isNew: true}, {Source: sourceSystemLogs, isNew: true}, {Source: sourceDLQ, isNew: true}} {
 		var err error

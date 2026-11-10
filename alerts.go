@@ -8,7 +8,7 @@
  * @file alerts.go
  * @brief Events, fingerprints, repeat suppression, recovery, rate limit and routing.
  *        Pure logic without database access.
- * @version 0.1.0
+ * @version 0.2.0
  * @date 2026-11-10
  *
  * @author ZHENG Robert (robert@hase-zheng.net)
@@ -29,9 +29,10 @@ import (
 )
 
 const (
-	severityError = "ERROR"
-	severityInfo  = "INFO"
-	timeLayout    = "2006-01-02 15:04:05 UTC"
+	severityError    = "ERROR"
+	severityInfo     = "INFO"
+	severitySecurity = "SECURITY"
+	timeLayout       = "2006-01-02 15:04:05 UTC"
 )
 
 var (
@@ -43,7 +44,8 @@ var (
 // Event is one detected problem of a monitored source.
 type Event struct {
 	Source   string      // unique source entry, e.g. "program_runs/3732"
-	Category string      // routing category: job, system, dlq
+	Category string      // routing category: job, system, dlq, security
+	Severity string      // mail severity; empty means ERROR
 	Group    string      // fingerprint group: job name, component, error code, hanging run
 	JobName  string      // job alerts only (recovery)
 	Subject  string      // subject text without prefix and severity
@@ -154,7 +156,11 @@ func (p *planner) mailEvent(e Event, alert *Alert) {
 			alert.SuppressedCount, alert.LastMailedAt.UTC().Format(timeLayout))
 	}
 	p.writeErrors(&body, e.Errors)
-	p.mails = append(p.mails, p.newMail(e.Category, severityError, e.Subject, []string{e.Source}, body.String()))
+	severity := e.Severity
+	if severity == "" {
+		severity = severityError
+	}
+	p.mails = append(p.mails, p.newMail(e.Category, severity, e.Subject, []string{e.Source}, body.String()))
 
 	now := p.now
 	alert.LastMailedAt = &now

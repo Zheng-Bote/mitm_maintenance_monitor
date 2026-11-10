@@ -8,7 +8,7 @@
  * @file sources.go
  * @brief Database queries of program_runs, system_logs and dead_letter_queue, source cursors
  *        (monitor_state) and alert state (monitor_alerts).
- * @version 0.1.1
+ * @version 0.2.0
  * @date 2026-11-10
  *
  * @author ZHENG Robert (robert@hase-zheng.net)
@@ -76,6 +76,9 @@ func dbNow(ctx context.Context, db *pgxpool.Pool) (time.Time, error) {
 	return now, nil
 }
 
+// eventSources are the sources whose first cursor is initialized without mails.
+var eventSources = []string{sourceProgramRuns, sourceSystemLogs, sourceDLQ, sourceMissedRuns, sourceAdminAudit}
+
 func loadCursors(ctx context.Context, db *pgxpool.Pool) (map[string]*cursor, error) {
 	rows, err := db.Query(ctx, "SELECT source, last_ts, last_id FROM monitor_state")
 	if err != nil {
@@ -93,7 +96,7 @@ func loadCursors(ctx context.Context, db *pgxpool.Pool) (map[string]*cursor, err
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("Failed to read monitor_state: %w", err)
 	}
-	for _, source := range []string{sourceProgramRuns, sourceSystemLogs, sourceDLQ} {
+	for _, source := range append(append([]string{}, eventSources...), sourceDigest, sourceHeartbeat) {
 		if cursors[source] == nil {
 			cursors[source] = &cursor{Source: source, isNew: true}
 		}

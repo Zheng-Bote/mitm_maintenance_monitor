@@ -3,12 +3,15 @@ Spec: MitM Maintenance Monitor Job
 Platform: Go/Linux
 
 Purpose:
-  Scheduled CLI batch job that detects critical errors (failed and hanging job runs, system_logs errors, new dead letters) and writes them as `*.SendMail` files into the outbox directory of mitm_maintenance_sendmail.
+  Scheduled CLI batch job that detects critical errors (failed, hanging and missed job runs, system_logs errors, new dead letters, critical admin actions) and writes them, plus an optional daily digest and heartbeat, as `*.SendMail` files into the outbox directory of mitm_maintenance_sendmail.
 
 Structure:
   ./main.go: CLI entry point, scheduler IPC, MitM database connection, run orchestration
   ./config.go: JSON job arguments, defaults and validation
   ./sources.go: database queries of the monitored sources, cursors and alert state persistence
+  ./sources_phase2.go: missed runs of scheduled programs and admin_audit_logs
+  ./cron.go: cron expressions with the semantics of the scheduler's Rust crate `cron` 0.12
+  ./daily.go: daily digest and heartbeat
   ./alerts.go: events, fingerprints, suppression, recovery, rate limit and routing
   ./mail.go: mail rendering (header block + body) and atomic file writing
   ./*_test.go: unit tests
@@ -34,6 +37,9 @@ Must:
   Keep one cursor per source in `monitor_state` and the suppression state in `monitor_alerts`; initialize a missing cursor to the current position without writing mails.
   Process only entries older than a settle delay of 60 seconds, so rows committed late are not skipped.
   Write mail files first, then commit cursors and alert state in one database transaction.
+  Evaluate `scheduled_programs.cron_expr` exactly like mitm_scheduler-server (crate `cron` 0.12, UTC: 5 fields become `0 <expr> *`, weekdays 1-7 with Sunday = 1, day of month AND day of week) and report a cron time as missed only if no run started within `[time - 1 min, time + grace_minutes]` and no previous run was still running.
+  Copy only allowlisted `admin_audit_logs.details` fields into mails.
+  Write the daily digest and the heartbeat at most once per day after their `hour_utc`, tracked in `monitor_state`.
   Write every mail atomically: `<name>.tmp` with mode `0600`, then rename to `<name>.SendMail`; `<name>` is derived deterministically from the source entries of the mail.
   Exit with code 1 after a `failed` status event and an `ERROR: <message>` audit event on every fatal error.
 
@@ -44,7 +50,7 @@ Must not:
   Include secrets, keys or `dead_letter_queue.payload` in mail files, logs or IPC events.
 
 Accepts:
-  @MonitorArgs: JSON CLI argument in `os.Args[1]` with `mail_dir`, `subject_prefix`, `sources`, `routing`, `suppress_repeat_minutes`, `recovery_mail`, `max_mails_per_run`, `max_message_chars`, `metadata_only` and `frontend_url`
+  @MonitorArgs: JSON CLI argument in `os.Args[1]` with `mail_dir`, `subject_prefix`, `sources` (`program_runs`, `missed_runs`, `system_logs`, `dead_letter_queue`, `admin_audit_logs`), `routing`, `suppress_repeat_minutes`, `recovery_mail`, `max_mails_per_run`, `max_message_chars`, `metadata_only`, `frontend_url`, `digest` and `heartbeat`
 
 Tasks:
   [x] #1 Configuration, IPC, database connection and run orchestration.
@@ -52,7 +58,7 @@ Tasks:
   [x] #3 Fingerprints, suppression, recovery, rate limit, routing.
   [x] #4 Mail rendering and atomic file writing.
   [x] #5 Unit tests, README, CHANGELOG, NOTICE, build.sh, .gitignore.
-  [ ] #6 Phase 2: `admin_audit_logs`, daily digest, heartbeat, missed runs (see feature spec).
+  [x] #6 Phase 2: missed runs (cron), `admin_audit_logs`, daily digest, heartbeat.
 
 Done when:
   `go test ./...` passes and `build.sh` produces a static binary.
@@ -62,6 +68,12 @@ Scenario: first run
   When the monitor runs
   Then the cursor is set to the newest settled `system_logs` id
   And no mail is written for older entries
+
+Scenario: missed run
+  Given the enabled program `clean up` has the cron expression `55 */8 * * *`
+  And no run of it started between 08:54 and 09:25 UTC
+  When the monitor runs at 09:30 UTC with `grace_minutes` 30
+  Then a mail `[MitM][ERROR] Job clean up did not run at 2026-11-10 08:55:00 UTC` is written
 
 Scenario: rate limit
   Given 25 new alerts and `max_mails_per_run` = 20
