@@ -114,14 +114,18 @@ func TestReadOnlySources(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	openAlerts, err := loadOpenAlerts(ctx, db)
+	if err != nil {
+		t.Fatal(err)
+	}
 	t.Logf("digest: jobs=%d jobWarnings=%d systemWarnings=%d dlq=%d/%d transformationErrors=%d openAlerts=%d",
 		len(digest.Jobs), len(digest.JobWarnings), len(digest.SystemWarnings), digest.DLQOpen, digest.DLQNew,
-		digest.TransformationErrorTotal, digest.OpenAlertCount)
+		digest.TransformationErrorTotal, len(openAlertsAfterRun(openAlerts, nil)))
 	heartbeat, err := collectHeartbeat(ctx, db)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("heartbeat: runs=%d failed=%d openAlerts=%d", heartbeat.Runs, heartbeat.Failed, heartbeat.OpenAlerts)
+	t.Logf("heartbeat: runs=%d failed=%d", heartbeat.Runs, heartbeat.Failed)
 
 	// First-run initialization paths (in memory only).
 	for _, c := range []*cursor{{Source: sourceProgramRuns, isNew: true}, {Source: sourceSystemLogs, isNew: true}, {Source: sourceDLQ, isNew: true}} {

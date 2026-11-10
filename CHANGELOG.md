@@ -5,6 +5,11 @@ All notable changes to the `mitm_maintenance_monitor` component will be document
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.3.1] - 2026-11-10
+
+### Fixed
+- Daily digest and heartbeat counted only the stored open alerts: alerts mailed or recovered in the same run (state committed after the mail files are written) were missing, e.g. "0 open alerts" right after two new alerts. The stored state is now combined with the alerts changed in this run.
+
 ## [v0.3.0] - 2026-11-10
 
 ### Added
