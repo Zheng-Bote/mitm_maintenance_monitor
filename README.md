@@ -365,7 +365,7 @@ only job, run, time and severity plus the frontend link:
 | Field | Required | Default | Description |
 |---|:---:|---|---|
 | `mail_dir` | ✅ | – | Outbox directory; must exist. |
-| `routing` | ✅ | – | Rules `{category, to, cc}`; every enabled category needs a rule or a `*` rule. Plain addresses only (`ops@example.com`). |
+| `routing` | ✅ | – | Rules `{category, to, cc}`; every enabled category needs a rule or a `*` rule. Plain addresses only (`ops@example.com`); the domain must contain a dot, as required by `mitm_maintenance_sendmail` (`ops@localhost` is rejected). |
 | `subject_prefix` | | `[MitM]` | Prefix of every subject, e.g. `[MitM prod]`. |
 | `sources.program_runs.enabled` | | `true` | Failed, hanging and recovered runs. |
 | `sources.program_runs.hanging_minutes` | | `120` | Running time after which a run counts as hanging. |

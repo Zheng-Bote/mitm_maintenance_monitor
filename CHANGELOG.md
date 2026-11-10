@@ -5,6 +5,11 @@ All notable changes to the `mitm_maintenance_monitor` component will be document
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.2.2] - 2026-11-10
+
+### Fixed
+- Recipient addresses (`routing`, `digest`, `heartbeat`) are validated with the rule of `mitm_maintenance_sendmail` (domain must contain a dot): an address such as `ops@localhost` is rejected at startup instead of ending up as `*.failed` file in the outbox.
+
 ## [v0.2.1] - 2026-11-10
 
 ### Changed

@@ -7,7 +7,7 @@
  *
  * @file config.go
  * @brief JSON job arguments of the monitor: defaults and validation.
- * @version 0.2.1
+ * @version 0.2.2
  * @date 2026-11-10
  *
  * @author ZHENG Robert (robert@hase-zheng.net)
@@ -232,13 +232,30 @@ func parseArgs(raw string) (MonitorArgs, error) {
 	return args, nil
 }
 
-// validateAddress accepts a plain e-mail address without display name.
+// validateAddress accepts a plain e-mail address without display name that mitm_maintenance_sendmail
+// also accepts, so an unusable recipient fails at startup instead of when the mail is sent.
 func validateAddress(address string) error {
 	parsed, err := mail.ParseAddress(address)
-	if err != nil || parsed.Name != "" || parsed.Address != address || strings.ContainsAny(address, ",\r\n") {
+	if err != nil || parsed.Name != "" || parsed.Address != address || strings.ContainsAny(address, ",\r\n") ||
+		!sendmailAcceptsAddress(address) {
 		return fmt.Errorf("invalid e-mail address %q", address)
 	}
 	return nil
+}
+
+// sendmailAcceptsAddress mirrors isValidEmail of mitm_maintenance_sendmail: no blanks or angle
+// brackets, exactly one '@' with a non-empty local part, and a domain that contains a dot and
+// neither starts nor ends with one (so e.g. ops@localhost is rejected).
+func sendmailAcceptsAddress(address string) bool {
+	if address == "" || strings.ContainsAny(address, " \t\r\n<>") {
+		return false
+	}
+	at := strings.IndexByte(address, '@')
+	if at <= 0 || at != strings.LastIndexByte(address, '@') || at == len(address)-1 {
+		return false
+	}
+	domain := address[at+1:]
+	return strings.Contains(domain, ".") && !strings.HasPrefix(domain, ".") && !strings.HasSuffix(domain, ".")
 }
 
 func (a MonitorArgs) enabledCategories() []string {

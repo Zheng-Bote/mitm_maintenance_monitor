@@ -66,6 +66,27 @@ func TestParseArgsRejectsInvalid(t *testing.T) {
 	}
 }
 
+func TestAddressesMatchSendmail(t *testing.T) {
+	for address, valid := range map[string]bool{
+		"ops@example.com":                  true,
+		"first.last@sub.example.de":        true,
+		"ops@localhost":                    false, // sendmail requires a dot in the domain
+		"ops@.example.com":                 false,
+		"ops@example.com.":                 false,
+		"@example.com":                     false,
+		"ops@@example.com":                 false,
+		"Ops <ops@example.com>":            false,
+		"ops@example.com\nBcc: x@evil.com": false,
+	} {
+		if got := validateAddress(address) == nil; got != valid {
+			t.Errorf("validateAddress(%q) valid=%v, want %v", address, got, valid)
+		}
+	}
+	if _, err := parseArgs(fmt.Sprintf(`{"mail_dir":%q,"routing":[{"category":"*","to":["ops@localhost"]}]}`, t.TempDir())); err == nil {
+		t.Fatal("parseArgs must reject recipients sendmail cannot deliver to")
+	}
+}
+
 func TestRecipients(t *testing.T) {
 	args := testArgs(t, "")
 	if to, cc := args.recipients(categorySystem); strings.Join(to, ",") != "admin@example.com" || strings.Join(cc, ",") != "ops@example.com" {
