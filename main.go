@@ -8,7 +8,7 @@
  * @file main.go
  * @brief Scheduled job that detects critical errors (failed and hanging job runs, system_logs errors,
  *        new dead letters) and writes them as *.SendMail files for mitm_maintenance_sendmail.
- * @version 0.1.1
+ * @version 0.2.0
  * @date 2026-11-10
  *
  * @author ZHENG Robert (robert@hase-zheng.net)
@@ -40,7 +40,7 @@ import (
 
 var (
 	appName = "MitM Maintenance Monitor"
-	version = "0.1.1"
+	version = "0.2.0"
 )
 
 const componentName = "mitm_maintenance_monitor"
@@ -126,6 +126,12 @@ func run(ctx context.Context) error {
 	for _, source := range result.initialized {
 		ipc.SendAudit(fmt.Sprintf("Initialized cursor of %s; older entries are not reported", source))
 	}
+	if result.missedTruncated {
+		ipc.SendAudit(fmt.Sprintf("WARNING: missed runs were only evaluated for the last %s", maxMissedWindow))
+	}
+	for _, program := range result.invalidCrons {
+		ipc.SendAudit("WARNING: invalid cron expression, the scheduler never starts " + program)
+	}
 	ipc.SendAudit(result.summary())
 	ipc.SendAudit(fmt.Sprintf("%s (%s) finished", appName, version))
 	log.Printf("%s finished. %s", appName, result.summary())
@@ -135,16 +141,27 @@ func run(ctx context.Context) error {
 // monitorResult summarizes one run.
 type monitorResult struct {
 	initialized                            []string
+	invalidCrons                           []string
+	missedTruncated                        bool
 	finishedRuns, failedRuns, hanging      int
-	systemErrors, deadLetters              int
+	missedRuns, systemErrors, deadLetters  int
+	securityEvents                         int
 	mails, recoveries, bundled, suppressed int
+	digest, heartbeat                      bool
 }
 
 func (r monitorResult) summary() string {
-	return fmt.Sprintf("Processed %d finished runs (%d failed), %d hanging runs, %d system errors, %d dead letters; "+
-		"mails written: %d (recoveries: %d, bundled into summary: %d), suppressed: %d",
-		r.finishedRuns, r.failedRuns, r.hanging, r.systemErrors, r.deadLetters,
-		r.mails, r.recoveries, r.bundled, r.suppressed)
+	daily := ""
+	if r.digest {
+		daily += ", daily digest"
+	}
+	if r.heartbeat {
+		daily += ", heartbeat"
+	}
+	return fmt.Sprintf("Processed %d finished runs (%d failed), %d hanging runs, %d missed runs, %d system errors, "+
+		"%d dead letters, %d security events; mails written: %d (recoveries: %d, bundled into summary: %d%s), suppressed: %d",
+		r.finishedRuns, r.failedRuns, r.hanging, r.missedRuns, r.systemErrors, r.deadLetters, r.securityEvents,
+		r.mails, r.recoveries, r.bundled, daily, r.suppressed)
 }
 
 // monitor collects the events of all enabled sources, writes the mail files and then commits
@@ -160,7 +177,7 @@ func monitor(ctx context.Context, db *pgxpool.Pool, args MonitorArgs) (monitorRe
 	if err != nil {
 		return result, err
 	}
-	for _, source := range []string{sourceProgramRuns, sourceSystemLogs, sourceDLQ} {
+	for _, source := range eventSources {
 		if cursors[source].isNew {
 			result.initialized = append(result.initialized, source)
 		}
@@ -215,6 +232,22 @@ func monitor(ctx context.Context, db *pgxpool.Pool, args MonitorArgs) (monitorRe
 		events = append(events, letters...)
 		result.deadLetters = len(letters)
 	}
+	if enabled(args.Sources.MissedRuns.Enabled) {
+		missed, err := collectMissedRuns(ctx, db, cursors[sourceMissedRuns], now, args.Sources.MissedRuns)
+		if err != nil {
+			return result, err
+		}
+		events = append(events, missed.events...)
+		result.missedRuns, result.invalidCrons, result.missedTruncated = len(missed.events), missed.invalidCrons, missed.truncated
+	}
+	if args.Sources.AdminAuditLogs.Enabled {
+		security, err := collectAdminAudit(ctx, db, cursors[sourceAdminAudit], settled, args.Sources.AdminAuditLogs)
+		if err != nil {
+			return result, err
+		}
+		events = append(events, security...)
+		result.securityEvents = len(security)
+	}
 	result.finishedRuns, result.failedRuns = len(runs), len(failedByRun)
 
 	fingerprints := make([]string, 0, len(failedByRun)+len(events))
@@ -245,6 +278,12 @@ func monitor(ctx context.Context, db *pgxpool.Pool, args MonitorArgs) (monitorRe
 	}
 
 	mails, bundled := plan.limit()
+	daily, err := dailyMails(ctx, db, args, now, cursors, result.invalidCrons)
+	if err != nil {
+		return result, err
+	}
+	result.digest, result.heartbeat = daily.digest, daily.heartbeat
+	mails = append(mails, daily.mails...)
 	for _, mail := range mails {
 		if err := writeMail(args.MailDir, mail); err != nil {
 			return result, err

@@ -5,6 +5,17 @@ All notable changes to the `mitm_maintenance_monitor` component will be document
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.2.0] - 2026-11-10
+
+Phase 2 of [#1](https://github.com/Zheng-Bote/mitm_maintenance_monitor/issues/1).
+
+### Added
+- **Missed runs** (`sources.missed_runs`, enabled by default): enabled scheduled programs without a run at a cron time within `grace_minutes`; cron expressions are evaluated with the semantics of the scheduler's Rust crate `cron` 0.12 (UTC, weekdays 1–7 with Sunday = 1, day of month AND day of week), verified against the crate. Running previous runs, program changes, invalid cron expressions and monitor outages (24 h window) are handled.
+- **Security events** (`sources.admin_audit_logs`, opt-in): configurable critical actions (case-insensitive), category `security`, severity `SECURITY`, only allowlisted `details` fields.
+- **Daily digest** (opt-in): runs per job, grouped `WARNING:` job audits and `WARN` system logs, DLQ backlog, transformation errors and open alerts of the last 24 hours.
+- **Heartbeat** (opt-in): daily proof-of-life mail with run statistics, open alerts, invalid cron expressions and source positions.
+- Events carry their own severity (`ERROR`, `INFO`, `SECURITY`).
+
 ## [v0.1.1] - 2026-11-10
 
 ### Fixed

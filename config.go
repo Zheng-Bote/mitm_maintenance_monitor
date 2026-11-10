@@ -7,7 +7,7 @@
  *
  * @file config.go
  * @brief JSON job arguments of the monitor: defaults and validation.
- * @version 0.1.0
+ * @version 0.2.0
  * @date 2026-11-10
  *
  * @author ZHENG Robert (robert@hase-zheng.net)
@@ -28,11 +28,16 @@ import (
 
 // Alert categories used for routing.
 const (
-	categoryJob    = "job"
-	categorySystem = "system"
-	categoryDLQ    = "dlq"
-	categoryAny    = "*"
+	categoryJob      = "job"
+	categorySystem   = "system"
+	categoryDLQ      = "dlq"
+	categorySecurity = "security"
+	categoryAny      = "*"
 )
+
+// defaultAdminActions are the admin_audit_logs actions reported by default (as written by mitm_http-server).
+var defaultAdminActions = []string{"assign_roles", "RESTORE_CONFIG", "key_rotation_success", "DELETE_CREDENTIAL",
+	"DELETE_TARGET_CREDENTIAL", "FORBIDDEN_ACCESS", "BOOTSTRAP_ADMIN_REGISTERED"}
 
 // systemLevels are the system_logs levels in ascending order.
 var systemLevels = []string{"DEBUG", "INFO", "WARN", "WARNING", "ERROR"}
@@ -49,13 +54,39 @@ type MonitorArgs struct {
 	MaxMessageChars       int           `json:"max_message_chars"`
 	MetadataOnly          bool          `json:"metadata_only"`
 	FrontendURL           string        `json:"frontend_url"`
+	Digest                DailyMail     `json:"digest"`
+	Heartbeat             DailyMail     `json:"heartbeat"`
+}
+
+// DailyMail configures a mail written once per day at HourUTC (digest, heartbeat).
+type DailyMail struct {
+	Enabled bool     `json:"enabled"`
+	HourUTC *int     `json:"hour_utc"`
+	To      []string `json:"to"`
+	Cc      []string `json:"cc"`
 }
 
 // SourcesConfig enables and configures the monitored sources.
 type SourcesConfig struct {
 	ProgramRuns     ProgramRunsConfig `json:"program_runs"`
+	MissedRuns      MissedRunsConfig  `json:"missed_runs"`
 	SystemLogs      SystemLogsConfig  `json:"system_logs"`
 	DeadLetterQueue DLQConfig         `json:"dead_letter_queue"`
+	AdminAuditLogs  AdminAuditConfig  `json:"admin_audit_logs"`
+}
+
+// MissedRunsConfig: enabled scheduled programs without a run at their cron times.
+type MissedRunsConfig struct {
+	Enabled      *bool    `json:"enabled"`
+	GraceMinutes int      `json:"grace_minutes"`
+	ExcludeJobs  []string `json:"exclude_jobs"`
+}
+
+// AdminAuditConfig: admin_audit_logs entries with a critical action (category security). Disabled by default.
+type AdminAuditConfig struct {
+	Enabled      bool     `json:"enabled"`
+	Actions      []string `json:"actions"`
+	DetailFields []string `json:"detail_fields"`
 }
 
 type ProgramRunsConfig struct {
@@ -112,6 +143,18 @@ func parseArgs(raw string) (MonitorArgs, error) {
 	if args.Sources.ProgramRuns.HangingMinutes == 0 {
 		args.Sources.ProgramRuns.HangingMinutes = 120
 	}
+	if args.Sources.MissedRuns.GraceMinutes == 0 {
+		args.Sources.MissedRuns.GraceMinutes = 30
+	}
+	if args.Sources.AdminAuditLogs.Actions == nil {
+		args.Sources.AdminAuditLogs.Actions = defaultAdminActions
+	}
+	for _, daily := range []*DailyMail{&args.Digest, &args.Heartbeat} {
+		if daily.HourUTC == nil {
+			hour := 6
+			daily.HourUTC = &hour
+		}
+	}
 	if args.Sources.SystemLogs.MinLevel == "" {
 		args.Sources.SystemLogs.MinLevel = "ERROR"
 	}
@@ -138,6 +181,10 @@ func parseArgs(raw string) (MonitorArgs, error) {
 		return args, errors.New("max_message_chars must be at least 50")
 	case args.Sources.ProgramRuns.HangingMinutes < 1:
 		return args, errors.New("sources.program_runs.hanging_minutes must be at least 1")
+	case args.Sources.MissedRuns.GraceMinutes < 1:
+		return args, errors.New("sources.missed_runs.grace_minutes must be at least 1")
+	case args.Sources.AdminAuditLogs.Enabled && len(args.Sources.AdminAuditLogs.Actions) == 0:
+		return args, errors.New("sources.admin_audit_logs.actions must not be empty")
 	case levelsFrom(args.Sources.SystemLogs.MinLevel) == nil:
 		return args, fmt.Errorf("sources.system_logs.min_level %q is unknown (DEBUG, INFO, WARN, ERROR)", args.Sources.SystemLogs.MinLevel)
 	case strings.ContainsAny(args.SubjectPrefix, "\r\n"):
@@ -154,6 +201,22 @@ func parseArgs(raw string) (MonitorArgs, error) {
 		for _, address := range append(append([]string{}, rule.To...), rule.Cc...) {
 			if err := validateAddress(address); err != nil {
 				return args, fmt.Errorf("routing[%d]: %w", i, err)
+			}
+		}
+	}
+	for name, daily := range map[string]DailyMail{"digest": args.Digest, "heartbeat": args.Heartbeat} {
+		if !daily.Enabled {
+			continue
+		}
+		if *daily.HourUTC < 0 || *daily.HourUTC > 23 {
+			return args, fmt.Errorf("%s.hour_utc must be between 0 and 23", name)
+		}
+		if len(daily.To) == 0 {
+			return args, fmt.Errorf("%s.to needs at least one recipient", name)
+		}
+		for _, address := range append(append([]string{}, daily.To...), daily.Cc...) {
+			if err := validateAddress(address); err != nil {
+				return args, fmt.Errorf("%s: %w", name, err)
 			}
 		}
 	}
@@ -176,8 +239,11 @@ func validateAddress(address string) error {
 
 func (a MonitorArgs) enabledCategories() []string {
 	var categories []string
-	if enabled(a.Sources.ProgramRuns.Enabled) {
+	if enabled(a.Sources.ProgramRuns.Enabled) || enabled(a.Sources.MissedRuns.Enabled) {
 		categories = append(categories, categoryJob)
+	}
+	if a.Sources.AdminAuditLogs.Enabled {
+		categories = append(categories, categorySecurity)
 	}
 	if enabled(a.Sources.SystemLogs.Enabled) {
 		categories = append(categories, categorySystem)

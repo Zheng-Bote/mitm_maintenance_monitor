@@ -14,10 +14,9 @@ The monitor never sends mails itself and never touches encrypted data – it onl
 reads log and status tables.
 
 > [!NOTE]
-> This is **phase 1** (feature issue
-> [#1](https://github.com/Zheng-Bote/mitm_maintenance_monitor/issues/1)).
-> Phase 2 adds `admin_audit_logs`, a daily digest, a heartbeat mail and
-> missed-run detection.
+> Feature issue [#1](https://github.com/Zheng-Bote/mitm_maintenance_monitor/issues/1):
+> phase 1 (failed/hanging runs, `system_logs`, dead letters) and phase 2
+> (missed runs, `admin_audit_logs`, daily digest, heartbeat).
 
 ---
 
@@ -26,6 +25,8 @@ reads log and status tables.
 - [What Is Monitored](#what-is-monitored)
 - [Architecture](#architecture)
 - [Mail Files](#mail-files)
+- [Missed Runs](#missed-runs)
+- [Daily Digest and Heartbeat](#daily-digest-and-heartbeat)
 - [Noise Control](#noise-control)
 - [Reliability](#reliability)
 - [Requirements](#requirements)
@@ -50,6 +51,8 @@ reads log and status tables.
 | `program_runs` | Successful run of a job with an open, mailed alert | `job` | Recovery mail (`[INFO]`) |
 | `system_logs` | Level ≥ `min_level`, component not excluded | `system` | Component, level, time, message |
 | `dead_letter_queue` | New entry with `resolved = false` | `dlq` | DLQ ID, package ID, error code, time, error message – **never the payload** |
+| `scheduled_programs` | Enabled program without a run at a cron time within `grace_minutes` ([Missed Runs](#missed-runs)) | `job` | Job name, cron expression, expected time |
+| `admin_audit_logs` | Entry with an action of `sources.admin_audit_logs.actions` (opt-in) | `security` | Action, user, time, log ID and allowlisted `details` fields |
 
 Immediate runs without scheduled program (`program_id` NULL, e.g. file
 uploads) are reported as job `Immediate_Trigger`; they never trigger a recovery
@@ -119,7 +122,7 @@ Errors:
 Details: https://mitm.example.com
 
 --
-MitM Maintenance Monitor 0.1.0
+MitM Maintenance Monitor 0.2.0
 ```
 
 | Subject | When |
@@ -129,6 +132,10 @@ MitM Maintenance Monitor 0.1.0
 | `[MitM][INFO] Job <name> recovered (RunID <id>)` | First successful run after a mailed failure |
 | `[MitM][ERROR] <component>: <message>` | `system_logs` error |
 | `[MitM][ERROR] Dead letter: <error code>` | New dead letter |
+| `[MitM][ERROR] Job <name> did not run at <time>` | Missed run |
+| `[MitM][SECURITY] <action> by <user>` | Critical `admin_audit_logs` action |
+| `[MitM][INFO] Daily digest <date>: <n> jobs with failures, <n> open alerts` | Daily digest |
+| `[MitM][INFO] Monitor heartbeat <date>: <n> open alerts` | Heartbeat |
 | `[MitM][ERROR] <n> further alerts` | Summary of mails above `max_mails_per_run` |
 
 - File name: `mitm-monitor_<hash>.SendMail`, the hash is derived from the source
@@ -141,6 +148,78 @@ MitM Maintenance Monitor 0.1.0
 > The header-block format requires
 > [mitm_maintenance_sendmail#1](https://github.com/Zheng-Bote/mitm_maintenance_sendmail/issues/1).
 > The current SendMail format (recipient = file name) cannot send these files.
+
+---
+
+## Missed Runs
+
+For every enabled `scheduled_programs` entry the monitor computes the cron
+times in `(last check, now − grace_minutes]` and reports every time without a
+run that started within `[time − 1 min, time + grace_minutes]`.
+
+- **Same semantics as the scheduler** (Rust crate `cron` 0.12, UTC): 5-field
+  expressions become `0 <expr> *`; 6/7 fields and `@yearly`, `@monthly`,
+  `@weekly`, `@daily`, `@hourly` are passed through; **day of week 1–7 with
+  Sunday = 1** (`sun`…`sat`); **day of month AND day of week** must both match;
+  `a/step` means `a`..max. The implementation was compared with the Rust crate
+  on 19 expressions.
+- A cron time is **not** missed while a previous run is still running – the
+  scheduler never starts a job twice (long runs are reported as hanging).
+- A program created or changed after a cron time is only checked from its
+  change on.
+- Several cron times of one job share one alert (suppression), and the next
+  successful run sends the recovery mail.
+- After a monitor outage only the last 24 hours are evaluated (audit warning).
+- Programs with an invalid cron expression are never started by the scheduler;
+  the monitor reports them as audit warning and in the heartbeat.
+- If the **scheduler itself is down**, every due job is reported as missed –
+  which is exactly the alarm wanted.
+
+> [!NOTE]
+> The Rust crate cannot look ahead across a year boundary for expressions with
+> a year field. The scheduler is unaffected (it always computes from "now"),
+> except a year-restricted job at midnight on January 1st, which the scheduler
+> does not start – the monitor then correctly reports it as missed.
+
+---
+
+## Daily Digest and Heartbeat
+
+Both are opt-in and written once per day after `hour_utc` (also if the monitor
+runs later that day), to their own recipients.
+
+**Digest** – the last 24 hours:
+
+```text
+Daily digest for the 24 hours before 2026-11-10 06:00:00 UTC.
+
+Job runs
+  Collector mirror-dev Employee              96 runs, 2 failed
+  Transformation Employee                    24 runs, 0 failed
+
+Job warnings (WARNING:): 2
+     2× cdh: CDH_RE: WARNING: skipped request v2_rooms {"level_code":"L1"}: giving up after 4 attempts: HTTP 503
+
+System warnings (WARN): 14
+    11× http-server: HTTP 404 Not Found - GET /dashboard
+     3× http-server: HTTP 403 Forbidden - GET /api/v1/logs/audit
+
+Dead letter queue: 3 unresolved, 1 new, oldest 2026-11-09 12:00:00 UTC
+
+Transformation errors: 5
+     5× email / mail: invalid format
+
+Open alerts: 1
+  [job] Job Collector mirror-dev Employee failed (RunID 4440, exit code 1) (+4 suppressed)
+```
+
+Similar texts (numbers and UUIDs ignored) are grouped; at most 20 groups per
+section. With `metadata_only` only the counts are shown.
+
+**Heartbeat** – proof of life: monitor version, runs and failures of the last
+24 hours, open alerts, programs with an invalid cron expression and the
+position of every source. *If this mail does not arrive, the scheduler, the
+monitor or the mail delivery is not running.*
 
 ---
 
@@ -230,14 +309,24 @@ argument.
   "subject_prefix": "[MitM prod]",
   "sources": {
     "program_runs":      { "enabled": true, "hanging_minutes": 120, "exclude_jobs": ["mitm_maintenance_monitor"] },
+    "missed_runs":       { "enabled": true, "grace_minutes": 30, "exclude_jobs": [] },
     "system_logs":       { "enabled": true, "min_level": "ERROR", "exclude_components": ["mitm_maintenance_monitor"] },
-    "dead_letter_queue": { "enabled": true }
+    "dead_letter_queue": { "enabled": true },
+    "admin_audit_logs":  {
+      "enabled": true,
+      "actions": ["assign_roles", "RESTORE_CONFIG", "key_rotation_success", "DELETE_CREDENTIAL",
+                  "DELETE_TARGET_CREDENTIAL", "FORBIDDEN_ACCESS", "BOOTSTRAP_ADMIN_REGISTERED"],
+      "detail_fields": ["source_name", "role_ids"]
+    }
   },
   "routing": [
-    { "category": "job",    "to": ["ops@example.com"] },
-    { "category": "system", "to": ["mitm-admin@example.com"], "cc": ["ops@example.com"] },
-    { "category": "*",      "to": ["mitm-admin@example.com"] }
+    { "category": "job",      "to": ["ops@example.com"] },
+    { "category": "system",   "to": ["mitm-admin@example.com"], "cc": ["ops@example.com"] },
+    { "category": "security", "to": ["security@example.com"] },
+    { "category": "*",        "to": ["mitm-admin@example.com"] }
   ],
+  "digest":    { "enabled": true, "hour_utc": 6, "to": ["ops@example.com"] },
+  "heartbeat": { "enabled": true, "hour_utc": 6, "to": ["mitm-admin@example.com"] },
   "suppress_repeat_minutes": 240,
   "recovery_mail": true,
   "max_mails_per_run": 20,
@@ -284,6 +373,15 @@ only job, run, time and severity plus the frontend link:
 | `sources.system_logs.min_level` | | `ERROR` | `DEBUG`, `INFO`, `WARN` or `ERROR`. |
 | `sources.system_logs.exclude_components` | | `["mitm_maintenance_monitor"]` | Components to ignore. |
 | `sources.dead_letter_queue.enabled` | | `true` | New unresolved dead letters. |
+| `sources.missed_runs.enabled` | | `true` | Missed runs of enabled scheduled programs (category `job`). |
+| `sources.missed_runs.grace_minutes` | | `30` | Time after a cron time within which the run must have started. |
+| `sources.missed_runs.exclude_jobs` | | `[]` | Job names to ignore. |
+| `sources.admin_audit_logs.enabled` | | `false` | Critical admin actions (category `security`; needs a `security` or `*` route). |
+| `sources.admin_audit_logs.actions` | | see full example | Actions to report, case-insensitive. |
+| `sources.admin_audit_logs.detail_fields` | | `[]` | Allowlist of `details` keys copied into the mail; `details` is never copied completely. |
+| `digest.enabled` / `heartbeat.enabled` | | `false` | Daily digest / heartbeat mail. |
+| `digest.hour_utc` / `heartbeat.hour_utc` | | `6` | Hour (UTC) after which the mail of the day is written. |
+| `digest.to`, `.cc` / `heartbeat.to`, `.cc` | ✅ if enabled | – | Recipients of the daily mail. |
 | `suppress_repeat_minutes` | | `240` | Suppression window per fingerprint; `0` disables suppression. |
 | `recovery_mail` | | `true` | Mail when a failing job succeeds again. |
 | `max_mails_per_run` | | `20` | Further mails are bundled into one summary mail. |
@@ -353,7 +451,9 @@ Exit code `0` means success, `1` a fatal error.
 | status `started` | `MitM Maintenance Monitor (<version>) started` |
 | status `processing` (20) | `Connected to MitM database` |
 | audit | `Initialized cursor of <source>; older entries are not reported` (first run) |
-| audit | `Processed <n> finished runs (<n> failed), <n> hanging runs, <n> system errors, <n> dead letters; mails written: <n> (recoveries: <n>, bundled into summary: <n>), suppressed: <n>` |
+| audit | `Processed <n> finished runs (<n> failed), <n> hanging runs, <n> missed runs, <n> system errors, <n> dead letters, <n> security events; mails written: <n> (recoveries: <n>, bundled into summary: <n>[, daily digest][, heartbeat]), suppressed: <n>` |
+| audit | `WARNING: missed runs were only evaluated for the last 24h0m0s` (after a monitor outage) |
+| audit | `WARNING: invalid cron expression, the scheduler never starts <job> (<cron>)` |
 | audit | `MitM Maintenance Monitor (<version>) finished` |
 | status `failed` + audit `ERROR: <message>` | Fatal error, exit code 1 |
 
@@ -362,10 +462,11 @@ Exit code `0` means success, `1` a fatal error.
 ## Security and Privacy
 
 - No decryption: the monitor reads `program_runs`, `scheduled_programs`,
-  `job_audit_logs`, `job_status_events`, `system_logs` and `dead_letter_queue`
-  only; it does not use the Master Key and never accesses `raw_ingestion`,
+  `job_audit_logs`, `job_status_events`, `system_logs`, `dead_letter_queue`,
+  `admin_audit_logs` and `transformation_errors` only; it does not use the Master Key and never accesses `raw_ingestion`,
   `ingestion_cursors` or `source_credentials`.
-- `dead_letter_queue.payload` is never read.
+- `dead_letter_queue.payload` is never read; of `admin_audit_logs.details`
+  only the allowlisted `detail_fields` are copied.
 - Mail files are plaintext: restrict `mail_dir` to the scheduler user
   (`chmod 700`); files are created with mode `0600`.
 - Error texts are truncated to `max_message_chars`; `metadata_only` removes
@@ -403,9 +504,13 @@ mitm_maintenance_monitor/
 ├── main.go                      # entry point, IPC, database connection, run orchestration
 ├── config.go                    # job arguments, defaults, validation, routing
 ├── sources.go                   # queries, cursors, alert state persistence
+├── sources_phase2.go            # missed runs, admin_audit_logs
+├── cron.go                      # cron expressions with the scheduler's semantics
+├── daily.go                     # daily digest and heartbeat
 ├── alerts.go                    # fingerprints, suppression, recovery, rate limit
 ├── mail.go                      # header-block rendering, atomic file writing
-├── monitor_test.go              # unit tests
+├── monitor_test.go              # unit tests (phase 1)
+├── phase2_test.go               # unit tests (phase 2)
 ├── integration_test.go          # read-only test against a real database (-tags integration)
 ├── mitm_maintenance_monitor.sdd # SpecDD component spec
 ├── build.sh
