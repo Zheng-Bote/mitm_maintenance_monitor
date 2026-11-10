@@ -7,7 +7,7 @@
  *
  * @file daily.go
  * @brief Daily digest (warnings and backlog of the last 24 hours) and heartbeat mail.
- * @version 0.2.0
+ * @version 0.3.1
  * @date 2026-11-10
  *
  * @author ZHENG Robert (robert@hase-zheng.net)
@@ -152,9 +152,6 @@ func collectDigest(ctx context.Context, db *pgxpool.Pool) (digestData, error) {
 	}
 	data.TransformationErrors = errorsByRule
 
-	if data.OpenAlerts, data.OpenAlertCount, err = queryOpenAlerts(ctx, db); err != nil {
-		return data, err
-	}
 	return data, nil
 }
 
@@ -170,23 +167,34 @@ func queryStrings(ctx context.Context, db *pgxpool.Pool, sql string) ([]string, 
 	return values, nil
 }
 
-func queryOpenAlerts(ctx context.Context, db *pgxpool.Pool) ([]openAlert, int, error) {
-	var count int
-	if err := db.QueryRow(ctx, "SELECT count(*)::int FROM monitor_alerts WHERE is_open AND last_mailed_at IS NOT NULL").Scan(&count); err != nil {
-		return nil, 0, fmt.Errorf("Failed to count open alerts: %w", err)
+// openAlertsAfterRun returns the open, mailed alerts as they are after this run: the stored state
+// combined with the alerts changed in this run, which are committed only after the mail files are
+// written. New and repeated alerts count, recovered ones do not. Newest first.
+func openAlertsAfterRun(stored, changed []*Alert) []openAlert {
+	byFingerprint := make(map[string]*Alert, len(stored)+len(changed))
+	for _, alert := range stored {
+		byFingerprint[alert.Fingerprint] = alert
 	}
-	rows, err := db.Query(ctx, `
-		SELECT category, summary, last_mailed_at, suppressed_count FROM monitor_alerts
-		WHERE is_open AND last_mailed_at IS NOT NULL ORDER BY last_seen DESC LIMIT $1
-	`, maxDigestGroups)
-	if err != nil {
-		return nil, 0, fmt.Errorf("Failed to query open alerts: %w", err)
+	for _, alert := range changed {
+		byFingerprint[alert.Fingerprint] = alert
 	}
-	alerts, err := pgx.CollectRows(rows, pgx.RowToStructByPos[openAlert])
-	if err != nil {
-		return nil, 0, fmt.Errorf("Failed to read open alerts: %w", err)
+	var alerts []*Alert
+	for _, alert := range byFingerprint {
+		if alert.IsOpen && alert.LastMailedAt != nil {
+			alerts = append(alerts, alert)
+		}
 	}
-	return alerts, count, nil
+	sort.Slice(alerts, func(i, j int) bool {
+		if !alerts[i].LastSeen.Equal(alerts[j].LastSeen) {
+			return alerts[i].LastSeen.After(alerts[j].LastSeen)
+		}
+		return alerts[i].Fingerprint < alerts[j].Fingerprint
+	})
+	open := make([]openAlert, len(alerts))
+	for i, alert := range alerts {
+		open[i] = openAlert{Category: alert.Category, Summary: alert.Summary, LastMailed: alert.LastMailedAt, Suppressed: alert.SuppressedCount}
+	}
+	return open
 }
 
 func renderDigest(data digestData, args MonitorArgs, slot time.Time) Mail {
@@ -273,9 +281,6 @@ func collectHeartbeat(ctx context.Context, db *pgxpool.Pool) (heartbeatData, err
 	`).Scan(&data.Runs, &data.Failed); err != nil {
 		return data, fmt.Errorf("Failed to query run statistics: %w", err)
 	}
-	if err := db.QueryRow(ctx, "SELECT count(*)::int FROM monitor_alerts WHERE is_open AND last_mailed_at IS NOT NULL").Scan(&data.OpenAlerts); err != nil {
-		return data, fmt.Errorf("Failed to count open alerts: %w", err)
-	}
 	return data, nil
 }
 
@@ -319,34 +324,48 @@ type dailyResult struct {
 	digest, heartbeat bool
 }
 
-// dailyMails writes the digest and the heartbeat once per day after their hour (UTC).
-func dailyMails(ctx context.Context, db *pgxpool.Pool, args MonitorArgs, now time.Time, cursors map[string]*cursor, invalidCrons []string) (dailyResult, error) {
+// dailyMails writes the digest and the heartbeat once per day after their hour (UTC). changed are
+// the alerts of this run that are not committed yet; they are included in the open alerts.
+func dailyMails(ctx context.Context, db *pgxpool.Pool, args MonitorArgs, now time.Time, cursors map[string]*cursor,
+	changed []*Alert, invalidCrons []string) (dailyResult, error) {
 	var result dailyResult
-	if args.Digest.Enabled {
-		c := cursors[sourceDigest]
-		if slot, due := dueSlot(now, *args.Digest.HourUTC, c.LastTS); due {
-			data, err := collectDigest(ctx, db)
-			if err != nil {
-				return result, err
-			}
-			result.mails = append(result.mails, renderDigest(data, args, slot))
-			c.LastTS, c.dirty, result.digest = &slot, true, true
-		}
+	digestSlot, digestDue := dueSlot(now, *args.Digest.HourUTC, cursors[sourceDigest].LastTS)
+	heartbeatSlot, heartbeatDue := dueSlot(now, *args.Heartbeat.HourUTC, cursors[sourceHeartbeat].LastTS)
+	digestDue = digestDue && args.Digest.Enabled
+	heartbeatDue = heartbeatDue && args.Heartbeat.Enabled
+	if !digestDue && !heartbeatDue {
+		return result, nil
 	}
-	if args.Heartbeat.Enabled {
-		c := cursors[sourceHeartbeat]
-		if slot, due := dueSlot(now, *args.Heartbeat.HourUTC, c.LastTS); due {
-			data, err := collectHeartbeat(ctx, db)
-			if err != nil {
-				return result, err
-			}
-			data.InvalidCrons = invalidCrons
-			for _, source := range eventSources {
-				data.Cursors = append(data.Cursors, cursors[source])
-			}
-			result.mails = append(result.mails, renderHeartbeat(data, args, slot))
-			c.LastTS, c.dirty, result.heartbeat = &slot, true, true
+	stored, err := loadOpenAlerts(ctx, db)
+	if err != nil {
+		return result, err
+	}
+	open := openAlertsAfterRun(stored, changed)
+
+	if digestDue {
+		data, err := collectDigest(ctx, db)
+		if err != nil {
+			return result, err
 		}
+		data.OpenAlertCount = len(open)
+		data.OpenAlerts = open[:min(len(open), maxDigestGroups)]
+		result.mails = append(result.mails, renderDigest(data, args, digestSlot))
+		c := cursors[sourceDigest]
+		c.LastTS, c.dirty, result.digest = &digestSlot, true, true
+	}
+	if heartbeatDue {
+		data, err := collectHeartbeat(ctx, db)
+		if err != nil {
+			return result, err
+		}
+		data.OpenAlerts = len(open)
+		data.InvalidCrons = invalidCrons
+		for _, source := range eventSources {
+			data.Cursors = append(data.Cursors, cursors[source])
+		}
+		result.mails = append(result.mails, renderHeartbeat(data, args, heartbeatSlot))
+		c := cursors[sourceHeartbeat]
+		c.LastTS, c.dirty, result.heartbeat = &heartbeatSlot, true, true
 	}
 	return result, nil
 }

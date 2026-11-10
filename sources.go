@@ -8,7 +8,7 @@
  * @file sources.go
  * @brief Database queries of program_runs, system_logs and dead_letter_queue, source cursors
  *        (monitor_state) and alert state (monitor_alerts).
- * @version 0.2.0
+ * @version 0.3.1
  * @date 2026-11-10
  *
  * @author ZHENG Robert (robert@hase-zheng.net)
@@ -376,6 +376,33 @@ func loadAlerts(ctx context.Context, db *pgxpool.Pool, fingerprints []string) (m
 	if err != nil {
 		return nil, fmt.Errorf("Failed to load monitor_alerts (migration 007 applied?): %w", err)
 	}
+	alerts, err := collectAlerts(rows)
+	if err != nil {
+		return nil, err
+	}
+	result := make(map[string]*Alert, len(alerts))
+	for _, alert := range alerts {
+		result[alert.Fingerprint] = alert
+	}
+	return result, nil
+}
+
+// loadOpenAlerts loads all stored open alerts that have been mailed.
+func loadOpenAlerts(ctx context.Context, db *pgxpool.Pool) ([]*Alert, error) {
+	rows, err := db.Query(ctx, `
+		SELECT fingerprint, category, COALESCE(job_name, ''), summary, first_seen, last_seen,
+		       last_mailed_at, suppressed_count, is_open
+		FROM monitor_alerts
+		WHERE is_open AND last_mailed_at IS NOT NULL
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("Failed to query open alerts: %w", err)
+	}
+	return collectAlerts(rows)
+}
+
+// collectAlerts reads monitor_alerts rows in the column order of loadAlerts / loadOpenAlerts.
+func collectAlerts(rows pgx.Rows) ([]*Alert, error) {
 	alerts, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (*Alert, error) {
 		alert := &Alert{}
 		err := row.Scan(&alert.Fingerprint, &alert.Category, &alert.JobName, &alert.Summary, &alert.FirstSeen,
@@ -385,11 +412,7 @@ func loadAlerts(ctx context.Context, db *pgxpool.Pool, fingerprints []string) (m
 	if err != nil {
 		return nil, fmt.Errorf("Failed to read monitor_alerts: %w", err)
 	}
-	result := make(map[string]*Alert, len(alerts))
-	for _, alert := range alerts {
-		result[alert.Fingerprint] = alert
-	}
-	return result, nil
+	return alerts, nil
 }
 
 // commitState stores the changed cursors and alerts in one transaction.

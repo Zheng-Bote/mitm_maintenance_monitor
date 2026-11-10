@@ -268,3 +268,32 @@ func TestHeartbeatRendering(t *testing.T) {
 		t.Fatalf("heartbeat mail: %+v", mail)
 	}
 }
+
+func TestOpenAlertsAfterRunIncludeThisRun(t *testing.T) {
+	mailed := t0.Add(-time.Hour)
+	stored := []*Alert{
+		{Fingerprint: "a", Category: categorySystem, Summary: "old system error", LastSeen: t0.Add(-2 * time.Hour), LastMailedAt: &mailed, IsOpen: true},
+		{Fingerprint: "b", Category: categoryJob, JobName: "Collector FR", Summary: "Job Collector FR failed", LastSeen: t0.Add(-time.Hour), LastMailedAt: &mailed, IsOpen: true},
+	}
+	// The case of the first real run: alerts of this run are not committed yet.
+	if open := openAlertsAfterRun(nil, nil); len(open) != 0 {
+		t.Fatalf("nothing stored, nothing changed: %v", open)
+	}
+
+	alerts := map[string]*Alert{}
+	for _, alert := range stored {
+		copied := *alert
+		alerts[alert.Fingerprint] = &copied
+	}
+	plan := newPlanner(testArgs(t, ""), t0, alerts)
+	plan.handle(failedEvent(4456, "ERROR: mail_dir is not an accessible directory")) // new alert, mailed in this run
+	plan.recover("Collector FR", "program_runs/9", 9, t0)                            // closes alert b
+
+	open := openAlertsAfterRun(stored, plan.dirtyAlerts())
+	if len(open) != 2 {
+		t.Fatalf("expected the stored system alert and the new job alert, got %+v", open)
+	}
+	if open[0].Summary != "Job Collector DE failed (RunID 4456, exit code 1)" || open[1].Summary != "old system error" {
+		t.Fatalf("newest first, recovered alert removed: %+v", open)
+	}
+}
