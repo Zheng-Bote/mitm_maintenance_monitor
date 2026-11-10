@@ -5,6 +5,15 @@ All notable changes to the `mitm_maintenance_monitor` component will be document
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.1.1] - 2026-11-10
+
+### Fixed
+- Immediate runs (`program_id` NULL, e.g. file uploads) made the `program_runs` query fail (`cannot scan NULL`); they are now reported as job `Immediate_Trigger`, like in the scheduler.
+- A successful immediate run no longer recovers the alerts of other immediate runs.
+
+### Added
+- Read-only integration test (`go test -tags integration`) for the source queries against a real MitM database.
+
 ## [v0.1.0] - 2026-11-10
 
 ### Added

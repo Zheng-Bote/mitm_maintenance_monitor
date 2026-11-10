@@ -51,6 +51,10 @@ reads log and status tables.
 | `system_logs` | Level ≥ `min_level`, component not excluded | `system` | Component, level, time, message |
 | `dead_letter_queue` | New entry with `resolved = false` | `dlq` | DLQ ID, package ID, error code, time, error message – **never the payload** |
 
+Immediate runs without scheduled program (`program_id` NULL, e.g. file
+uploads) are reported as job `Immediate_Trigger`; they never trigger a recovery
+mail, because all immediate runs share this name.
+
 The scheduler messages `Job <name> failed with code <code> (RunID: <id>)` and
 `Error waiting for job …` in `system_logs` are skipped, because the same failure
 is reported from `program_runs` with more detail.
@@ -201,6 +205,14 @@ category `*` apply when no rule of the category exists.
 ```sh
 go test ./...
 ./build.sh      # static binary, version from the Git tag, copied to ../../app/bin/
+```
+
+Read-only integration test against a real MitM database (runs the source
+queries, writes nothing, works without migration 007):
+
+```sh
+MITM_DB_HOST=<host> MITM_DB_PORT=<port> MITM_DB_USER=<user> MITM_DB_PASSWORD=<password> MITM_DB_NAME=mitm \
+  go test -tags integration -run TestReadOnlySources -v ./...
 ```
 
 ---
@@ -394,6 +406,7 @@ mitm_maintenance_monitor/
 ├── alerts.go                    # fingerprints, suppression, recovery, rate limit
 ├── mail.go                      # header-block rendering, atomic file writing
 ├── monitor_test.go              # unit tests
+├── integration_test.go          # read-only test against a real database (-tags integration)
 ├── mitm_maintenance_monitor.sdd # SpecDD component spec
 ├── build.sh
 ├── CHANGELOG.md
