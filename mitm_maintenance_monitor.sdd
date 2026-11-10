@@ -1,0 +1,69 @@
+Spec: MitM Maintenance Monitor Job
+
+Platform: Go/Linux
+
+Purpose:
+  Scheduled CLI batch job that detects critical errors (failed and hanging job runs, system_logs errors, new dead letters) and writes them as `*.SendMail` files into the outbox directory of mitm_maintenance_sendmail.
+
+Structure:
+  ./main.go: CLI entry point, scheduler IPC, MitM database connection, run orchestration
+  ./config.go: JSON job arguments, defaults and validation
+  ./sources.go: database queries of the monitored sources, cursors and alert state persistence
+  ./alerts.go: events, fingerprints, suppression, recovery, rate limit and routing
+  ./mail.go: mail rendering (header block + body) and atomic file writing
+  ./*_test.go: unit tests
+  ./build.sh: static binary build script
+
+Owns:
+  ./**
+  @MonitorArgs
+  @Event
+  @Alert
+  @Mail
+  @IPCClient
+
+References:
+  ../maintenance-layer.sdd
+  ../../specs/features/maintenance-monitor/maintenance-monitor.sdd
+  ../mitm_maintenance_sendmail/mitm_maintenance_sendmail.sdd
+  ../../collector-layer/collector_creation_guide.md
+
+Must:
+  Fetch `MITM_DB_CONFIG_JSON` from the scheduler Unix Domain Socket via `get_credentials` at startup, falling back to environment variables for standalone execution; the Master Key is not needed and not used.
+  Report `status` and `audit` events via a nil-safe `@IPCClient` without writing directly to database log tables.
+  Keep one cursor per source in `monitor_state` and the suppression state in `monitor_alerts`; initialize a missing cursor to the current position without writing mails.
+  Process only entries older than a settle delay of 60 seconds, so rows committed late are not skipped.
+  Write mail files first, then commit cursors and alert state in one database transaction.
+  Write every mail atomically: `<name>.tmp` with mode `0600`, then rename to `<name>.SendMail`; `<name>` is derived deterministically from the source entries of the mail.
+  Exit with code 1 after a `failed` status event and an `ERROR: <message>` audit event on every fatal error.
+
+Must not:
+  Run a persistent watcher or daemon loop.
+  Decrypt data or access `raw_ingestion`, `ingestion_cursors` or `source_credentials`.
+  Send mails itself.
+  Include secrets, keys or `dead_letter_queue.payload` in mail files, logs or IPC events.
+
+Accepts:
+  @MonitorArgs: JSON CLI argument in `os.Args[1]` with `mail_dir`, `subject_prefix`, `sources`, `routing`, `suppress_repeat_minutes`, `recovery_mail`, `max_mails_per_run`, `max_message_chars`, `metadata_only` and `frontend_url`
+
+Tasks:
+  [x] #1 Configuration, IPC, database connection and run orchestration.
+  [x] #2 Sources `program_runs` (failed, hanging, successful for recovery), `system_logs`, `dead_letter_queue` with cursors.
+  [x] #3 Fingerprints, suppression, recovery, rate limit, routing.
+  [x] #4 Mail rendering and atomic file writing.
+  [x] #5 Unit tests, README, CHANGELOG, NOTICE, build.sh, .gitignore.
+  [ ] #6 Phase 2: `admin_audit_logs`, daily digest, heartbeat, missed runs (see feature spec).
+
+Done when:
+  `go test ./...` passes and `build.sh` produces a static binary.
+
+Scenario: first run
+  Given `monitor_state` has no row for `system_logs`
+  When the monitor runs
+  Then the cursor is set to the newest settled `system_logs` id
+  And no mail is written for older entries
+
+Scenario: rate limit
+  Given 25 new alerts and `max_mails_per_run` = 20
+  When the monitor runs
+  Then 20 mail files and one summary mail listing the other 5 alerts are written
