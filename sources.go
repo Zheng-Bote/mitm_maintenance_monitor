@@ -8,7 +8,7 @@
  * @file sources.go
  * @brief Database queries of program_runs, system_logs and dead_letter_queue, source cursors
  *        (monitor_state) and alert state (monitor_alerts).
- * @version 0.1.0
+ * @version 0.1.1
  * @date 2026-11-10
  *
  * @author ZHENG Robert (robert@hase-zheng.net)
@@ -36,6 +36,9 @@ const (
 	sourceSystemLogs  = "system_logs"
 	sourceDLQ         = "dead_letter_queue"
 
+	// immediateJob is the name the scheduler uses for runs without scheduled program (program_id NULL).
+	immediateJob = "Immediate_Trigger"
+
 	// settleDelay: only entries older than this are processed, so rows committed late are not skipped.
 	settleDelay  = 60 * time.Second
 	batchLimit   = 1000
@@ -58,6 +61,7 @@ type cursor struct {
 type finishedRun struct {
 	ID       int64
 	Job      string
+	Program  bool // false for immediate runs without scheduled program
 	ExitCode *int32
 	Success  bool
 	Started  time.Time
@@ -107,21 +111,21 @@ func collectFinishedRuns(ctx context.Context, db *pgxpool.Pool, c *cursor, settl
 	}
 	lastID, _ := strconv.ParseInt(c.LastID, 10, 64)
 	rows, err := db.Query(ctx, `
-		SELECT r.id, COALESCE(p.name, 'program ' || r.program_id::text), r.exit_code,
-		       COALESCE(r.success, false), r.started_at, r.finished_at
+		SELECT r.id, COALESCE(p.name, 'program ' || r.program_id::text, $5), r.program_id IS NOT NULL,
+		       r.exit_code, COALESCE(r.success, false), r.started_at, r.finished_at
 		FROM program_runs r
 		LEFT JOIN scheduled_programs p ON p.id = r.program_id
 		WHERE r.finished_at IS NOT NULL AND r.finished_at <= $1
 		  AND (r.finished_at, r.id) > ($2::timestamptz, $3::int)
 		ORDER BY r.finished_at, r.id
 		LIMIT $4
-	`, settled, c.LastTS, lastID, batchLimit)
+	`, settled, c.LastTS, lastID, batchLimit, immediateJob)
 	if err != nil {
 		return nil, fmt.Errorf("Failed to query program_runs: %w", err)
 	}
 	runs, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (finishedRun, error) {
 		var run finishedRun
-		err := row.Scan(&run.ID, &run.Job, &run.ExitCode, &run.Success, &run.Started, &run.Finished)
+		err := row.Scan(&run.ID, &run.Job, &run.Program, &run.ExitCode, &run.Success, &run.Started, &run.Finished)
 		return run, err
 	})
 	if err != nil {
@@ -197,13 +201,13 @@ func failedRunEvent(run finishedRun, errorLines []string) Event {
 // collectHangingRuns returns one event per run without finished_at that runs longer than hangingMinutes.
 func collectHangingRuns(ctx context.Context, db *pgxpool.Pool, now time.Time, hangingMinutes int) ([]Event, error) {
 	rows, err := db.Query(ctx, `
-		SELECT r.id, COALESCE(p.name, 'program ' || r.program_id::text), COALESCE(r.pid, 0), r.started_at
+		SELECT r.id, COALESCE(p.name, 'program ' || r.program_id::text, $3), COALESCE(r.pid, 0), r.started_at
 		FROM program_runs r
 		LEFT JOIN scheduled_programs p ON p.id = r.program_id
 		WHERE r.finished_at IS NULL AND r.started_at < $1
 		ORDER BY r.id
 		LIMIT $2
-	`, now.Add(-time.Duration(hangingMinutes)*time.Minute), batchLimit)
+	`, now.Add(-time.Duration(hangingMinutes)*time.Minute), batchLimit, immediateJob)
 	if err != nil {
 		return nil, fmt.Errorf("Failed to query hanging program_runs: %w", err)
 	}

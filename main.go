@@ -8,7 +8,7 @@
  * @file main.go
  * @brief Scheduled job that detects critical errors (failed and hanging job runs, system_logs errors,
  *        new dead letters) and writes them as *.SendMail files for mitm_maintenance_sendmail.
- * @version 0.1.0
+ * @version 0.1.1
  * @date 2026-11-10
  *
  * @author ZHENG Robert (robert@hase-zheng.net)
@@ -40,7 +40,7 @@ import (
 
 var (
 	appName = "MitM Maintenance Monitor"
-	version = "0.1.0"
+	version = "0.1.1"
 )
 
 const componentName = "mitm_maintenance_monitor"
@@ -231,11 +231,13 @@ func monitor(ctx context.Context, db *pgxpool.Pool, args MonitorArgs) (monitorRe
 
 	plan := newPlanner(args, now, alerts)
 	// Finished runs in finish order: a failure opens an alert, a later success recovers it.
+	// Immediate runs share one name, so their success must not recover other immediate runs.
 	for _, run := range runs {
-		if run.Success {
-			plan.recover(run.Job, fmt.Sprintf("%s/%d", sourceProgramRuns, run.ID), run.ID, run.Finished)
-		} else {
+		switch {
+		case !run.Success:
 			plan.handle(failedByRun[run.ID])
+		case run.Program:
+			plan.recover(run.Job, fmt.Sprintf("%s/%d", sourceProgramRuns, run.ID), run.ID, run.Finished)
 		}
 	}
 	for _, event := range events {

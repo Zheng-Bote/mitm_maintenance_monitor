@@ -195,7 +195,7 @@ func (p *planner) recover(job string, runSource string, runID int64, finished ti
 		{"Job", job},
 		{"Run ID", fmt.Sprint(runID)},
 		{"Finished", finished.UTC().Format(timeLayout)},
-		{"Failing since", since.UTC().Format(timeLayout)},
+		{"Since", since.UTC().Format(timeLayout)},
 	}
 	if suppressed > 0 {
 		fields = append(fields, [2]string{"Suppressed", fmt.Sprintf("%d occurrences without mail", suppressed)})
